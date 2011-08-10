@@ -1,5 +1,7 @@
 package bluemold.stm
 
+import annotation.tailrec
+
 /**
  * TransactionalHashTable<br/>
  * Author: Neil Essy<br/>
@@ -47,7 +49,7 @@ class TransactionalFixedHashTable[K,T]( requestedSize: Int ) {
     if ( atomic {
       val entry = getEntry( key )
       if ( entry != null )
-        ret = Some( entry.value.get )
+        ret = Some( entry.value.get() )
     } ) ret
     else get( key )
   }
@@ -57,11 +59,32 @@ class TransactionalFixedHashTable[K,T]( requestedSize: Int ) {
     getEntry( key, table( index ) )
   }
 
+  private def addEntry( entry: Entry[K,T] ) {
+    val ref = table( indexFor( hashFun( entry.key.hashCode ) ) )
+    val nextEntry = ref.get()
+    entry.next.set( nextEntry )
+    ref.set( entry )
+  }
+
+  @tailrec
   private def getEntry( key: K, ref: Ref[Entry[K,T]] ): Entry[K,T] = {
-    val entry = ref.get
+    val entry = ref.get()
     if ( entry == null ) null
     else if ( entry.key == key ) entry
     else getEntry( key, entry.next )
+  }
+
+  def put( key: K, value: T ) { put0( key, value ) }
+
+  @tailrec
+  private def put0( key: K, value: T ) {
+    if ( ! atomic {
+      val entry = getEntry( key )
+      if ( entry == null )
+        addEntry( new Entry[K,T]( key, value ) )
+      else
+        entry.value.set( value )
+    } ) put0( key, value )
   }
 
   def insert( key: K, value: T ): Boolean = { false
@@ -80,7 +103,7 @@ class TransactionalFixedHashTable[K,T]( requestedSize: Int ) {
     
   }
 
-  def size(): Int = _size.get
+  def size(): Int = _size.get()
 
   /**
    * Applies a supplemental hash function to a given hashCode, which
@@ -89,17 +112,13 @@ class TransactionalFixedHashTable[K,T]( requestedSize: Int ) {
    * otherwise encounter collisions for hashCodes that do not differ
    * in lower bits. Note: Null keys always map to hash 0, thus index 0.
    */
-  private def hashFun(_h: Int): Int =
-  {
+  private def hashFun(_h: Int): Int = {
     val h = _h ^ ( ( _h >>> 20 ) ^ ( _h >>> 12 ) )
-    return h ^ ( h >>> 7 ) ^ ( h >>> 4 )
+    h ^ ( h >>> 7 ) ^ ( h >>> 4 )
   }
 
   /**
    * Returns index for hash code h.
    */
-  private def indexFor(h: Int): Int =
-  {
-    return h & ( length - 1 )
-  }
+  private def indexFor(h: Int): Int = h & ( length - 1 )
 }
