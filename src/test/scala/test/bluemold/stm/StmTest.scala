@@ -53,7 +53,7 @@ class StmTest extends TestCase("stm") {
           }
         } match {
           case Some( result ) => result
-          case None => swap( keyA, keyB )
+          case None => swap( keyA, keyB ) // transaction failed try again
         }
       }
       assertFalse( swap( "Bye", "Hi" ) )
