@@ -20,9 +20,9 @@ object TransactionalFixedHashTable {
 }
 class TransactionalFixedHashTable[K,T]( requestedSize: Int ) {
   import Stm._
-  val length = ensurePowerSize( requestedSize, TransactionalFixedHashTable.DEFAULT_CAPACITY )
-  val table = initTable( new Array[Ref[Entry[K,T]]](length), 0 )
   val _size = new Ref[Int]( 0 )
+  val length = ensurePowerSize( requestedSize, TransactionalFixedHashTable.DEFAULT_CAPACITY )
+  val table = initTable( new Array[Ref[Entry[K,T]]](length), 0, length )
 
   private def ensurePowerSize( requestedSize: Int, powerSize: Int ): Int = {
     if ( requestedSize <= powerSize ) powerSize
@@ -30,11 +30,12 @@ class TransactionalFixedHashTable[K,T]( requestedSize: Int ) {
     else ensurePowerSize( requestedSize, powerSize * 2 )
   }
 
-  private def initTable( table: Array[Ref[Entry[K,T]]], index: Int ): Array[Ref[Entry[K,T]]] = {
+  @tailrec
+  private def initTable( table: Array[Ref[Entry[K,T]]], index: Int, size: Int ): Array[Ref[Entry[K,T]]] = {
     if ( index == size ) table
     else {
       table( index ) = new Ref[Entry[K,T]]( null )
-      initTable( table, index + 1 )
+      initTable( table, index + 1, size )
     }
   }
 

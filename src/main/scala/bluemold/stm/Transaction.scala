@@ -191,6 +191,20 @@ object Stm {
     ! transaction.aborted
   }
 
+  def atomic[T]( body: => T ): Option[T] = {
+    val transaction = startTransaction
+    var res: Option[T] = None
+    try {
+      res = Some( body )
+    } catch {
+      case t: Throwable => abortTransaction; throw new RuntimeException( "Exception caught inside atomic", t )
+      case _ => abortTransaction; throw new RuntimeException( "Unknown Exception thrown inside atomic" )
+    } finally {
+      commitTransaction
+    }
+    if ( ! transaction.aborted ) res else None
+  }
+
   def deferredUpdateUsingSelf[T]( ref: Ref[T] )( compute: ( T ) => T ) = {
     val transaction = transactionLocal.get
     if ( transaction == null ) {

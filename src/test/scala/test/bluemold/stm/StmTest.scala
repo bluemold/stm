@@ -1,7 +1,10 @@
 package test.bluemold.stm
 
 import junit.framework._;
-import Assert._;
+import Assert._
+import annotation.tailrec
+import bluemold.stm.{Stm, TransactionalFixedHashTable}
+;
 
 object StmTest {
     def suite: Test = {
@@ -18,14 +21,45 @@ object StmTest {
  * Unit tests for stm.
  */
 class StmTest extends TestCase("stm") {
+  import Stm._
 
     /**
      * Rigourous Tests :-)
      */
     def testOK() {
-      // todo
-      assertTrue(true)
+      val hashA = new TransactionalFixedHashTable[String,String]( 16 )
+      val hashB = new TransactionalFixedHashTable[String,String]( 16 )
+
+      hashA.put( "Hi", "Hello" )
+      hashB.put( "Bye", "Goodbye" )
+
+      @tailrec
+      def swap( keyA: String, keyB: String ): Boolean = {
+        atomic {
+          hashA.get( keyA ) match {
+            case Some( valueA ) => {
+              hashB.get( keyB ) match {
+                case Some( valueB ) => {
+                  hashA.remove( keyA )
+                  hashB.remove( keyB )
+                  hashA.put( keyB, valueB )
+                  hashB.put( keyA, valueA )
+                  true
+                }
+                case None => false // oh well
+              }
+            }
+            case None => false // oh well
+          }
+        } match {
+          case Some( result ) => result
+          case None => swap( keyA, keyB )
+        }
+      }
+      assertFalse( swap( "Bye", "Hi" ) )
+      assertTrue( swap( "Hi", "Bye" ) )
     }
+
     def testKO() {
       // todo
       assertTrue(false)
