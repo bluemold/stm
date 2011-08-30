@@ -2,13 +2,6 @@ package bluemold.stm
 
 import annotation.tailrec
 
-/**
- * TransactionalHashTable<br/>
- * Author: Neil Essy<br/>
- * Created: 5/11/11<br/>
- * <p/>
- * [Description]
- */
 object TransactionalFixedHashTable {
   /**
    * The maximum capacity, used if a higher value is implicitly specified
@@ -18,8 +11,7 @@ object TransactionalFixedHashTable {
   private[stm] val DEFAULT_CAPACITY: Int = 16
   private[stm] val MAXIMUM_CAPACITY: Int = 1 << 30
 }
-class TransactionalFixedHashTable[K,T]( requestedSize: Int ) {
-  import Stm._
+final class TransactionalFixedHashTable[K,T]( requestedSize: Int ) {
   val _size = new Ref[Int]( 0 )
   val length = ensurePowerSize( requestedSize, TransactionalFixedHashTable.DEFAULT_CAPACITY )
   val table = initTable( new Array[Ref[Entry[K,T]]](length), 0, length )
@@ -45,14 +37,17 @@ class TransactionalFixedHashTable[K,T]( requestedSize: Int ) {
     val value = new Ref[T]( initial )
   }
 
+  @tailrec
   def get( key: K ): Option[T] = {
-    var ret: Option[T] = None
-    if ( atomic {
+    atomic {
       val entry = getEntry( key )
       if ( entry != null )
-        ret = Some( entry.value.get() )
-    } ) ret
-    else get( key )
+        Some( entry.value.get() )
+      else None
+    } match {
+      case None => get( key )
+      case Some( value ) => value
+    }
   }
 
   private def getEntry( key: K ): Entry[K,T] = {
@@ -79,13 +74,16 @@ class TransactionalFixedHashTable[K,T]( requestedSize: Int ) {
 
   @tailrec
   private def put0( key: K, value: T ) {
-    if ( ! atomic {
+    atomic {
       val entry = getEntry( key )
       if ( entry == null )
         addEntry( new Entry[K,T]( key, value ) )
       else
         entry.value.set( value )
-    } ) put0( key, value )
+    } match {
+      case None => put0( key, value ) // if it fails repeat
+      case _ => // otherwise, we are done
+    } 
   }
 
   def insert( key: K, value: T ): Boolean = { false
