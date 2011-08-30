@@ -1,19 +1,19 @@
 package test.bluemold.stm
 
-import junit.framework._;
+import junit.framework._
 import Assert._
 import annotation.tailrec
-import bluemold.stm.{Stm, TransactionalFixedHashTable}
-;
+import bluemold.stm._
+import bluemold.stm.TransactionalFixedHashTable
 
 object StmTest {
     def suite: Test = {
-        val suite = new TestSuite(classOf[StmTest]);
+        val suite = new TestSuite(classOf[StmTest])
         suite
     }
 
     def main(args : Array[String]) {
-        junit.textui.TestRunner.run(suite);
+        junit.textui.TestRunner.run(suite)
     }
 }
 
@@ -21,7 +21,6 @@ object StmTest {
  * Unit tests for stm.
  */
 class StmTest extends TestCase("stm") {
-  import Stm._
 
     /**
      * Rigourous Tests :-)
