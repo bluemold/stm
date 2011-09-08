@@ -12,17 +12,21 @@ final class Transaction {
   var nesting = 0
   var aborted = false
   var commiting = false
+  var lastUpdate: Option[Any] = None 
+  def getLastUpdate = lastUpdate
   def commit(): Boolean = {
     commiting = true
     refs.toList match {
-      case Nil => true
+      case Nil => deferred match {
+        case Nil => true
+        case list => commit1( new CasnSequence(), list )
+      }
       case bindings => commit0( new CasnSequence(), bindings )
     }
   }
   def addDeferred( deferredOp: Deferred ) {
-    deferred = deferredOp :: deferred
+    deferred ::= deferredOp
   }
-  
   @tailrec
   private def commit0( seq: CasnSequence, bindings: List[(Ref[Any],Binding)] ): Boolean = {
     bindings match {
@@ -35,14 +39,16 @@ final class Transaction {
   private def commit1( seq: CasnSequence, deferred: List[Deferred] ): Boolean = {
     deferred match {
       case head :: tail => commit1( head.addToSequence( seq ), tail )
-      case Nil => seq.execute()
+      case Nil =>
+        lastUpdate = seq.executeOption()
+        lastUpdate != None 
     }
   }
 }
 
 final class Ref[+T]( initial: T ) {
   val casnValue: CasnVar = CasnVar.create( initial )
-  def dirtyGet(): T = casnValue.get.asInstanceOf[T]
+  def dirtyGet(): T = casnValue.getValue.asInstanceOf[T]
   def get(): T = {
     get0( false )
   }
