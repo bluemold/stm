@@ -35,6 +35,25 @@ package object stm {
 		else throw new RuntimeException( "What Happened!" )
 	  }
 	}
+  private def commitTransactionWithGet[T]( ref: Ref[T] ) = {
+    var res: Option[T] = None
+    val transaction = transactionLocal.get
+    if ( transaction == null )
+      throw new RuntimeException( "What Happened!" )
+    else {
+      if ( transaction.nesting == 0 ) {
+        if ( ! transaction.aborted )
+          res = transaction.commitWithGet( ref: Ref[T] )
+        if ( res == None )
+          transaction.aborted = true
+        transactionLocal.remove()
+      } else if ( transaction.nesting > 0 ) {
+        res = Some( ref.get() )
+        transaction.nesting -= 1
+      } else throw new RuntimeException( "What Happened!" )
+    }
+    res
+  }
 	private def abortTransaction() {
 	  val transaction = transactionLocal.get
 	  if ( transaction == null ) {
@@ -58,54 +77,55 @@ package object stm {
     if (!transaction.aborted) res else None
   }
 
-  def atomicDeferred( body: => Unit ): Option[Any] = {
-    val transaction = startTransaction()
+  def atomicOn[S,T]( ref: Ref[T] )( body: => S ): Option[T] = {
+    var res: Option[T] = None
+    startTransaction()
     try {
       body
     } catch {
       case t: Throwable => abortTransaction(); throw new RuntimeException( "Exception caught inside atomic", t )
       case _ => abortTransaction(); throw new RuntimeException( "Unknown Exception thrown inside atomic" )
     } finally {
-      commitTransaction()
+      res = commitTransactionWithGet( ref )
     }
-    transaction.getLastUpdate
+    res
   }
 
-  def atomicOn[T]( ref: Ref[T] )( fun: (T) => T ): Option[T] = {
+  def atomicUpdate[T]( ref: Ref[T] )( fun: (T) => T ): Option[T] = {
     val transaction = transactionLocal.get
     if ( transaction == null ) {
-      val seq = new CasnSequence()
-      seq.set( ref.casnValue, (op) => fun( op.prior( 0 ).asInstanceOf[T] ) )
-      seq.executeOption().asInstanceOf[Option[T]]
-    } else ( atomicDeferred { deferredUpdateUsingSelf( ref )( fun ) } ).asInstanceOf[Option[T]]
+      CasnSequence
+      .update( ref, fun )
+      .executeOption()
+    } else { ref.set( fun( ref.get() ) ); Some( ref.get() ) }
   }
 
-	def deferredUpdateUsingSelf[T]( ref: Ref[T] )( compute: ( T ) => T ) {
+	def deferredUpdate[T]( ref: Ref[T] )( compute: ( T ) => T ) {
 	  val transaction = transactionLocal.get
 	  if ( transaction == null ) {
 		throw new IllegalThreadStateException( "This can only be called inside a transaction" )
 	  } else
-		transaction.addDeferred( new DeferredUpdateSelf( ref, compute ) )
+		transaction.deferredUpdate( ref )( compute )
 	}
-	def deferredUpdateUsing[T,S]( ref: Ref[T] )( source: Ref[S] )( compute: ( S ) => T ) {
+	def deferredUpdateUsing[T,S]( ref: Ref[T] )( source: Ref[S] )( compute: ( T, S ) => T ) {
 	  val transaction = transactionLocal.get
 	  if ( transaction == null ) {
 		throw new IllegalThreadStateException( "This can only be called inside a transaction" )
 	  } else
-		transaction.addDeferred( new DeferredUpdateUsing( ref, source, compute ) )
+		transaction.deferredUpdateUsing( ref )( source )( compute )
 	}
 	def deferredExpect[T]( ref: Ref[T] )( compute: => T ) {
 	  val transaction = transactionLocal.get
 	  if ( transaction == null ) {
 		throw new IllegalThreadStateException( "This can only be called inside a transaction" )
 	  } else
-		transaction.addDeferred( new DeferredExpect( ref, compute ) )
+		transaction.deferredExpect( ref )( compute )
 	}
 	def deferredExpectUsing[T,S]( ref: Ref[T] )( source: Ref[S] )( compute: ( S ) => T ) {
 	  val transaction = transactionLocal.get
 	  if ( transaction == null ) {
 		throw new IllegalThreadStateException( "This can only be called inside a transaction" )
 	  } else
-		transaction.addDeferred( new DeferredExpectUsing( ref, source, compute ) )
+		transaction.deferredExpectUsing( ref )( source )( compute )
 	}
 }

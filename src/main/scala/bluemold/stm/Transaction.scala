@@ -1,54 +1,139 @@
 package bluemold.stm
 
 import annotation.tailrec
-import bluemold.concurrent.casn.{CasnOp, TaggedValue, CasnSequence, CasnVar}
 import collection.mutable.HashMap
+import bluemold.concurrent.casn._
 
-final case class Binding( original: TaggedValue, current: Any )
+final case class Binding[T]( ref: Ref[T], original: TaggedValue[T], current: T )
 
+private[stm] object Transaction {
+  val maxRefList = 8
+}
 final class Transaction {
-  val refs = new HashMap[Ref[Any], Binding]
-  var deferred: List[Deferred] = Nil
+  import Transaction._
+  var _refs: HashMap[Ref[_], Binding[_]] = null
+  var firstDeferred: CasnOp[_] = null
+  var deferred: CasnOp[_] = null
   var nesting = 0
   var aborted = false
   var commiting = false
-  var lastUpdate: Option[Any] = None 
-  def getLastUpdate = lastUpdate
+
+  @inline
+  private[stm] def getBinding[T]( target: Ref[T] ): Option[Binding[T]] = {
+    _refs match {
+      case null => None
+      case bindings => bindings.get( target ).asInstanceOf[Option[Binding[T]]]
+    }
+  }
+  @inline
+  @tailrec
+  private[stm] def getListBinding[T]( target: Ref[T], refs: List[Binding[_]] ): Option[Binding[T]] = refs match {
+    case Nil => None
+    case binding :: tail =>
+      if ( binding.ref == target ) Some( binding.asInstanceOf[Binding[T]] )
+      else getListBinding( target, tail )
+  }
+
+  @inline
+  private[stm] def setBinding( binding: Binding[_] ) {
+    if ( _refs == null )
+      _refs = new HashMap[Ref[_], Binding[_]]
+    _refs.put( binding.ref, binding )
+  }
+
+  @inline
+  private[stm] def updateBinding( binding: Binding[_] ) {
+    if ( _refs == null )
+      _refs = new HashMap[Ref[_], Binding[_]]
+    _refs.put( binding.ref, binding )
+  }
+
+  @inline
   def commit(): Boolean = {
     commiting = true
-    refs.toList match {
-      case Nil => deferred match {
-        case Nil => true
-        case list => commit1( new CasnSequence(), list )
-      }
-      case bindings => commit0( new CasnSequence(), bindings )
-    }
-  }
-  def addDeferred( deferredOp: Deferred ) {
-    deferred ::= deferredOp
-  }
-  @tailrec
-  private def commit0( seq: CasnSequence, bindings: List[(Ref[Any],Binding)] ): Boolean = {
-    bindings match {
-      case ( ref: Ref[Any], Binding( original, current ) ) :: tail => commit0( seq.casTaggedVal( ref.casnValue, original, current ), tail )
-      case Nil => commit1( seq, deferred.reverse )
+    _refs match {
+      case null =>
+        if ( deferred  == null ) true
+        else new CasnSequence[Any]( deferred.asInstanceOf[CasnOp[Any]] ).execute()
+      case bindings =>
+        val bindingOps = createBindingOps( bindings.values )
+        if ( deferred == null ) new CasnSequence[Any]( bindingOps.asInstanceOf[CasnOp[Any]] ).execute()
+        else {
+          bindingOps.nextOp = firstDeferred
+          firstDeferred.prevOp = bindingOps
+          new CasnSequence[Any]( deferred.asInstanceOf[CasnOp[Any]] ).execute()
+        }
     }
   }
 
-  @tailrec
-  private def commit1( seq: CasnSequence, deferred: List[Deferred] ): Boolean = {
-    deferred match {
-      case head :: tail => commit1( head.addToSequence( seq ), tail )
-      case Nil =>
-        lastUpdate = seq.executeOption()
-        lastUpdate != None 
+  @inline
+  def commitWithGet[T]( ref: Ref[T] ): Option[T] = {
+    commiting = true
+    _refs match {
+      case null =>
+        if ( deferred == null ) new CasnSequence[T]( NoOp.get( ref ) ).executeOption()
+        else new CasnSequence[T]( deferred.get( ref ) ).executeOption()
+      case bindings =>
+        val bindingOps = createBindingOps( bindings.values )
+        if ( deferred == null ) new CasnSequence[T]( bindingOps.get( ref ) ).executeOption()
+        else {
+          bindingOps.nextOp = firstDeferred
+          firstDeferred.prevOp = bindingOps
+          new CasnSequence[T]( deferred.get( ref ) ).executeOption()
+        }
     }
   }
+
+  @inline
+  private def createBindingOps( bindings: Iterable[Binding[_]] ): CasnOp[_] = {
+    var op: CasnOp[_] = NoOp
+    bindings foreach { binding =>
+      op = op.casTaggedVal( binding.ref.asInstanceOf[Ref[Any]],
+        binding.original.asInstanceOf[TaggedValue[Any]],
+        binding.current.asInstanceOf[Any] )
+    }
+    op
+  }
+
+  def deferredUpdate[T]( ref: Ref[T] )( compute: ( T ) => T ) {
+    if ( firstDeferred == null ) {
+      firstDeferred = NoOp.update( ref, compute )
+      deferred = firstDeferred
+    } else deferred = deferred.update( ref, compute )
+  }
+  def deferredUpdateUsing[T,S]( ref: Ref[T] )( source: Ref[S] )( compute: ( T, S ) => T ) {
+    if ( firstDeferred == null ) {
+      val getOp: CasnOp[S] = NoOp.get( source )
+      firstDeferred = getOp
+      deferred = getOp.update( ref , (old: T) => compute( old, getOp.getPrevValue.value ) )
+    } else {
+      val getOp: CasnOp[S] = deferred.get( source )
+      deferred = getOp.update( ref , (old: T) => compute( old, getOp.getPrevValue.value ) )
+    }
+  }
+  def deferredExpect[T]( ref: Ref[T] )( compute: => T ) {
+    if ( firstDeferred == null ) {
+      firstDeferred = NoOp.expect( ref, (op: CasnOp[T] ) => compute )
+      deferred = firstDeferred
+    } else deferred = deferred.expect( ref, (op: CasnOp[T] ) => compute )
+  }
+  def deferredExpectUsing[T,S]( ref: Ref[T] )( source: Ref[S] )( compute: ( S ) => T ) {
+    if ( firstDeferred == null ) {
+      val getOp: CasnOp[S] = NoOp.get( source )
+      firstDeferred = getOp
+      deferred = getOp.expect( ref , (op: CasnOp[T]) => compute( getOp.getPrevValue.value ) )
+    } else {
+      val getOp: CasnOp[S] = deferred.get( source )
+      deferred = getOp.expect( ref , (op: CasnOp[T]) => compute( getOp.getPrevValue.value ) )
+    }
+  }
+  
 }
-
-final class Ref[+T]( initial: T ) {
-  val casnValue: CasnVar = CasnVar.create( initial )
-  def dirtyGet(): T = casnValue.getValue.asInstanceOf[T]
+object Ref {
+  def apply[T]( initial: T ) = new Ref( initial )
+}
+final class Ref[T]( initial: T ) extends CasnVar[T]( initial ) {
+  def dirtyGet(): T = getValue
   def get(): T = {
     get0( false )
   }
@@ -60,35 +145,35 @@ final class Ref[+T]( initial: T ) {
       val transaction = getTransaction
       if ( transaction.commiting )
         throw new IllegalStateException( "Cannot perform additional atomic operations during the commit of a transaction" )
-      transaction.refs.get( this ) match {
+      transaction.getBinding( this ) match {
         case None => {
-          val taggedValue = if ( safer ) casnValue.safeGetTagged() else casnValue.getTagged
-          transaction.refs.put( this, Binding( taggedValue, taggedValue.value ) )
-          taggedValue.value.asInstanceOf[T]
+          val taggedValue = if ( safer ) safeGetTagged() else getTagged
+          transaction.setBinding( Binding( this, taggedValue, taggedValue.value ) )
+          taggedValue.value
         }
-        case Some( Binding( original, current ) ) => current.asInstanceOf[T]
+        case Some( Binding( _, original, current ) ) => current.asInstanceOf[T]
       }
-    } else casnValue.safeGet().asInstanceOf[T]
+    } else safeGet()
   } 
-  def set[S]( update: S ) {
+  def set( update: T ) {
     set0( false, update )
   }
-  def saferSet[S]( update: S ) {
+  def saferSet( update: T ) {
     set0( true, update )
   }
-  private def set0[S]( safer: Boolean, update: S ) {
+  private def set0( safer: Boolean, update: T ) {
     if ( hasTransaction ) {
       val transaction = getTransaction
       if ( transaction.commiting )
         throw new IllegalStateException( "Cannot perform additional atomic operations during the commit of a transaction" )
-      transaction.refs.get( this ) match {
+      transaction.getBinding( this ) match {
         case None => {
-          val taggedValue = if ( safer ) casnValue.safeGetTagged() else casnValue.getTagged
-          transaction.refs.put( this, Binding( taggedValue, update ) )
+          val taggedValue = if ( safer ) safeGetTagged() else getTagged
+          transaction.setBinding( Binding( this, taggedValue, update ) )
         }
-        case Some( Binding( original, current ) ) => transaction.refs.put( this, Binding( original, update ) )
+        case Some( Binding( _, original, current ) ) => transaction.updateBinding( Binding( this, original, update ) )
       }
-    } else casnValue.set( update )
+    } else safeSet( update )
   }
   def lock() {
     get()
@@ -96,77 +181,45 @@ final class Ref[+T]( initial: T ) {
   def saferLock() {
     saferGet()
   }
-  def expect[S]( expect: S ): Boolean = {
+  def expect( expect: T ): Boolean = {
     get() == expect
   }
-  def compareAndSet[S]( expect: S, update: S ): Boolean = {
+  def compareAndSet( expect: T, update: T ): Boolean = {
     compareAndSet0( false, expect, update )
   }
-  private def compareAndSet0[S]( safer: Boolean, expect: S, update: S ): Boolean = {
+  private def compareAndSet0( safer: Boolean, expect: T, update: T ): Boolean = {
     if ( hasTransaction ) {
       val transaction = getTransaction
       if ( transaction.commiting )
         throw new IllegalStateException( "Cannot perform additional atomic operations during the commit of a transaction" )
-      transaction.refs.get( this ) match {
+      transaction.getBinding( this ) match {
         case None => {
-          val taggedValue = if ( safer ) casnValue.safeGetTagged() else casnValue.getTagged
+          val taggedValue = if ( safer ) safeGetTagged() else getTagged
           if ( expect == taggedValue.value ) {
-            transaction.refs.put( this, Binding( taggedValue, update ) )
+            transaction.setBinding( Binding( this, taggedValue, update ) )
             true
           } else {
-            transaction.refs.put( this, Binding( taggedValue, taggedValue.value ) )
+            transaction.setBinding( Binding( this, taggedValue, taggedValue.value ) )
             false
           }
         }
-        case Some( Binding( original, current ) ) => {
+        case Some( Binding( _, original, current ) ) => {
           if ( expect == current ) {
-            transaction.refs.put( this, Binding( original, update ) )
+            transaction.updateBinding( Binding( this, original, update ) )
             true
           } else false
         }
       }
-    } else casnValue.cas( expect, update )
+    } else safeCas( expect, update )
   }
-  def saferExpect[S]( expect: S ): Boolean = {
+  def saferExpect( expect: T ): Boolean = {
     saferGet() == expect
   }
-}
-
-abstract class Deferred {
-  def addToSequence( seq: CasnSequence ): CasnSequence
-}
-class DeferredUpdateSelf[T]( ref: Ref[T], compute: ( T ) => T ) extends Deferred {
-  def addToSequence( seq: CasnSequence ) = {
-	seq.set( ref.casnValue, ( op: CasnOp ) => compute( op.prior( 0 ).asInstanceOf[T] ) )
-	seq
+  def alter( update: (T) => T ): T = {
+    set( update( get() ) )
+    get()
   }
 }
-class DeferredUpdateUsing[T,S]( ref: Ref[T], source: Ref[S], compute: ( S ) => T ) extends Deferred {
-  def addToSequence( seq: CasnSequence ) = {
-	seq.get( source.casnValue )
-	seq.set( ref.casnValue, ( op: CasnOp ) => compute( op.prior( 1 ).asInstanceOf[S] ) )
-	seq
-  }
-}
-class DeferredExpect[T]( ref: Ref[T], compute: => T ) extends Deferred {
-  def addToSequence( seq: CasnSequence ) = {
-	seq.expect( ref.casnValue, ( op: CasnOp ) => compute )
-	seq
-  }
-}
-class DeferredExpectUsing[T,S]( ref: Ref[T], source: Ref[S], compute: ( S ) => T ) extends Deferred {
-  def addToSequence( seq: CasnSequence ) = {
-	seq.get( source.casnValue )
-	seq.expect( ref.casnValue, ( op: CasnOp ) => compute( op.prior( 1 ).asInstanceOf[S] ) )
-	seq
-  }
-}
-
-abstract class AtomicResult[+A]
-case object Success extends AtomicResult[Nothing]
-case object Failure extends AtomicResult[Nothing]
-case class Returning[+A]( x: A ) extends AtomicResult[A]
-
 
 object StmTest {
   def main( args: Array[String] ) {
