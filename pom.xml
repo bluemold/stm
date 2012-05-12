@@ -11,7 +11,7 @@
     <url>http://bluemold.org/stm</url>
 
   <properties>
-    <scala.version>2.9.1</scala.version>
+    <scala.version>2.9.2</scala.version>
   </properties>
 
   <repositories>
@@ -31,7 +31,7 @@
     <pluginRepository>
       <id>scala-tools.org</id>
       <name>Scala-Tools Maven2 Repository</name>
-      <url>http://scala-tools.org/repo-releases</url>
+      <url>https://oss.sonatype.org/content/groups/scala-tools</url>
     </pluginRepository>
   </pluginRepositories>
 
