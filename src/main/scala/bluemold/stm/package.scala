@@ -55,7 +55,6 @@ package object stm {
       res = Some(body)
     } catch {
       case t: Throwable => abortTransaction(); throw new RuntimeException("Exception caught inside atomic", t)
-      case _ => abortTransaction(); throw new RuntimeException("Unknown Exception thrown inside atomic")
     } finally {
       commitTransaction(transaction)
     }
@@ -71,7 +70,6 @@ package object stm {
       body
     } catch {
       case t: Throwable => abortTransaction(); throw new RuntimeException( "Exception caught inside atomic", t )
-      case _ => abortTransaction(); throw new RuntimeException( "Unknown Exception thrown inside atomic" )
     } finally {
       res = commitTransactionWithGet( transaction, ref )
       transaction.reset()

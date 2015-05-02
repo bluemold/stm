@@ -1,5 +1,6 @@
 package bluemold.stm
 
+import scala.language.existentials
 import annotation.tailrec
 import collection.mutable.HashMap
 import bluemold.concurrent.casn._
